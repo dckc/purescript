@@ -81,7 +81,7 @@ compile' env opts ms = do
   let js = mapMaybe (flip (moduleToJs opts) env') modulesToCodeGen
   let exts = intercalate "\n" . map (`moduleToPs` env') $ modulesToCodeGen
   js' <- generateMain env' opts js
-  return (prettyPrintJS [wrapExportsContainer opts js'], exts, env')
+  return (prettyPrintJS js', exts, env')
   where
   mainModuleIdent = moduleNameFromString <$> optionsMain opts
 
@@ -128,7 +128,7 @@ generateMain env opts js =
     Just mmi -> do
       when ((mmi, Ident C.main) `M.notMember` names env) $
         Left $ show mmi ++ "." ++ C.main ++ " is undefined"
-      return $ js ++ [JSApp (JSAccessor C.main (JSAccessor (moduleNameToJs mmi) (JSVar C._ps))) []]
+      return $ js ++ [JSApp (JSAccessor C.main (JSVar (moduleNameToJs mmi))) []]
     _ -> return js
 
 -- |
@@ -208,7 +208,7 @@ make opts ms = do
     let mod' = Module moduleName' regrouped exps
         js = moduleToJs opts mod' env'
         exts = moduleToPs mod' env'
-        js' = maybe "" (prettyPrintJS . return . wrapExportsContainer opts . return) js
+        js' = maybe "" (prettyPrintJS . return) js
 
     writeTextFile jsFile js'
     writeTextFile externsFile exts
@@ -216,7 +216,7 @@ make opts ms = do
     go env' ms'
 
 toFileName :: ModuleName -> FilePath
-toFileName (ModuleName ps) = intercalate [pathSeparator] . map runProperName $ ps
+toFileName (ModuleName ps) = intercalate "." . map runProperName $ ps
 
 rebuildIfNecessary :: (Functor m, Monad m, MonadMake m) => M.Map ModuleName [ModuleName] -> S.Set ModuleName -> [Module] -> m [(Bool, Module)]
 rebuildIfNecessary _ _ [] = return []

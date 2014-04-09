@@ -19,7 +19,6 @@ module Language.PureScript.CodeGen.JS (
     module AST,
     declToJs,
     moduleToJs,
-    wrapExportsContainer,
     isIdent
 ) where
 
@@ -41,7 +40,6 @@ import Language.PureScript.Types
 import Language.PureScript.Optimizer
 import Language.PureScript.CodeGen.Common
 import Language.PureScript.Environment
-import qualified Language.PureScript.Constants as C
 
 -- |
 -- Generate code in the simplified Javascript intermediate representation for all declarations in a
@@ -51,16 +49,29 @@ moduleToJs :: Options -> Module -> Environment -> Maybe JS
 moduleToJs opts (Module name decls (Just exps)) env =
   case jsDecls of
     [] -> Nothing
-    _ -> Just $ JSAssignment (JSAccessor (moduleNameToJs name) (JSVar C._ps)) $
-           JSApp (JSFunction Nothing [] (JSBlock $
-            JSVariableIntroduction "module" (Just $ JSObjectLiteral []) :
-            jsDecls ++
-            jsExports ++
-            [JSReturn $ JSVar "module"])) []
+    _ -> Just $
+      JSAssignment (JSAccessor "exports" (JSVar "module")) $
+        JSApp (JSFunction Nothing [] (JSBlock (
+          JSStringLiteral "use strict" :
+          JSVariableIntroduction "module" (Just (JSObjectLiteral [])) :
+          jsImports ++
+          jsDecls ++
+          jsExports ++
+          [ JSReturn (JSVar "module") ]))) []
   where
   jsDecls = (concat $ mapMaybe (\decl -> fmap (map $ optimize opts) $ declToJs opts name decl env) decls)
   jsExports = concatMap exportToJs exps
+  jsImports = concatMap importToJs decls
 moduleToJs _ _ _ = error "Exports should have been elaborated in name desugaring"
+
+importToJs :: Declaration -> [JS]
+importToJs (ImportDeclaration mn _ _) = [
+    JSVariableIntroduction (moduleNameToJs mn) (Just (
+      JSApp (JSVar "require")
+            [JSStringLiteral (runModuleName mn)]
+    ))
+  ]
+importToJs _ = []
 
 -- |
 -- Generate code in the simplified Javascript intermediate representation for a declaration
@@ -179,7 +190,6 @@ bindNames m idents env = env { names = M.fromList [ ((m, ident), (noType, LocalV
   where
   noType = error "Temporary lambda variable type was read"
 
-
 -- |
 -- Generate code in the simplified Javascript intermediate representation for runtime type checks.
 --
@@ -225,7 +235,7 @@ varToJs m qual = qualifiedToJS m id qual
 -- variable that may have a qualified name.
 --
 qualifiedToJS :: ModuleName -> (a -> Ident) -> Qualified a -> JS
-qualifiedToJS m f (Qualified (Just m') a) | m /= m' = accessor (f a) (JSAccessor (moduleNameToJs m') $ JSVar C._ps)
+qualifiedToJS m f (Qualified (Just m') a) | m /= m' = accessor (f a) (JSVar (moduleNameToJs m'))
 qualifiedToJS _ f (Qualified _ a) = JSVar $ identToJs (f a)
 
 -- |
@@ -329,12 +339,3 @@ isOnlyConstructor e ctor =
   typeConstructor (Qualified (Just moduleName) _, (tyCtor, _)) = (moduleName, tyCtor)
   typeConstructor _ = error "Invalid argument to isOnlyConstructor"
 
-wrapExportsContainer :: Options -> [JS] -> JS
-wrapExportsContainer opts modules = JSApp (JSFunction Nothing [C._ps] $ JSBlock $ JSStringLiteral "use strict" : modules) [exportSelector]
-  where
-  exportSelector = JSConditional (JSBinary And (JSBinary NotEqualTo (JSTypeOf $ JSVar "module") (JSStringLiteral "undefined")) (JSAccessor "exports" (JSVar "module")))
-                           (JSAccessor "exports" (JSVar "module"))
-                           (JSConditional (JSBinary NotEqualTo (JSTypeOf $ JSVar "window") (JSStringLiteral "undefined"))
-                             (JSAssignment (JSAccessor browserNamespace (JSVar "window")) (JSBinary Or (JSAccessor browserNamespace (JSVar "window")) (JSObjectLiteral [])))
-                             (JSApp (JSFunction Nothing [] $ JSBlock [JSThrow $ JSStringLiteral "PureScript doesn't know how to export modules in the current environment"]) []))
-  browserNamespace = optionsBrowserNamespace opts
